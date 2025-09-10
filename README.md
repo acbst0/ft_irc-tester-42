@@ -1,4 +1,4 @@
-# 42 ft_irc Tester
+# 42 FT_IRC TESTER
 
 ## 🚀 Enhanced ft_irc Test Runner - README
 
