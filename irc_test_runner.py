@@ -1,34 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ft_irc Test Runner UI (no‑root, 42‑friendly)
+🚀 ft_irc Test Runner - User-Friendly Edition
 
-What this does (quick):
-  • Lets users point to their compiled ./ircserv binary (no sudo needed)
-  • Starts the server on a free high port with a chosen password
-  • Runs ONE of your two testers (v1 or v2)
-  • Captures logs (server + tester) into a run directory
-  • (Optional) Runs server under valgrind and parses leak summary; warns if leaks
+A simple, interactive test runner for your ft_irc project that makes testing easy!
 
-Usage (non‑interactive):
-  python3 irc_test_runner.py \
-      --binary ./ircserv \
-      --password pass \
-      --tester v2 \
-      --valgrind \
-      --timeout 20 \
-      --out runs/latest
+✨ Features:
+  • 🎯 Auto-detects your ircserv binary
+  • 🌈 Colorful, clear output
+  • 🔍 Smart file discovery
+  • 🛡️  Memory leak detection with Valgrind
+  • 📊 Beautiful test results
+  • 🎛️  Interactive or command-line modes
 
-Or just run without flags for a tiny interactive prompt:
-  python3 irc_test_runner.py
+🚀 Quick Start:
+  Just run: python3 irc_test_runner.py
+  
+📚 Advanced Usage:
+  python3 irc_test_runner.py --binary ./ircserv --tester v2 --valgrind
 
-Notes:
-  • Assumes python3 is available and your testers are placed next to this file
-    as `irc_super_tester.py` (v1) and `irc_super_tester_v2.py` (v2).
-  • Uses only unprivileged ports and standard user permissions.
-  • Valgrind section mirrors the common flags used in 42 defenses.
+🎮 Interactive Mode (recommended for beginners):
+  python3 irc_test_runner.py --interactive
 
-Author: for Ahmet & 42 peers
+Author: Enhanced for 42 students with ❤️
 """
 from __future__ import annotations
 import argparse
@@ -43,6 +37,106 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+
+# --------------------------- Colors & UI Helpers ---------------------------
+
+class Colors:
+    """ANSI color codes for beautiful terminal output"""
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def colorize(text: str, color: str) -> str:
+    """Add color to text if terminal supports it"""
+    if not sys.stdout.isatty():
+        return text
+    return f"{color}{text}{Colors.ENDC}"
+
+def print_header(text: str) -> None:
+    """Print a beautiful header"""
+    border = "=" * (len(text) + 4)
+    print(f"\n{colorize(border, Colors.CYAN)}")
+    print(f"{colorize(f'  {text}  ', Colors.CYAN + Colors.BOLD)}")
+    print(f"{colorize(border, Colors.CYAN)}\n")
+
+def print_success(text: str) -> None:
+    """Print success message"""
+    print(f"{colorize('✅', Colors.GREEN)} {text}")
+
+def print_error(text: str) -> None:
+    """Print error message"""
+    print(f"{colorize('❌', Colors.RED)} {text}")
+
+def print_warning(text: str) -> None:
+    """Print warning message"""
+    print(f"{colorize('⚠️ ', Colors.YELLOW)} {text}")
+
+def print_info(text: str) -> None:
+    """Print info message"""
+    print(f"{colorize('ℹ️ ', Colors.BLUE)} {text}")
+
+def print_step(step: int, total: int, text: str) -> None:
+    """Print a step in the process"""
+    print(f"{colorize(f'[{step}/{total}]', Colors.BLUE)} {text}")
+
+# --------------------------- Smart File Detection ---------------------------
+
+def find_ircserv_binary() -> list[Path]:
+    """Smart detection of ircserv binary in common locations"""
+    possible_paths = [
+        Path("./ircserv"),
+        Path("../ircserv"),
+        Path("./build/ircserv"),
+        Path("./bin/ircserv"),
+        Path("./ircserv/ircserv"),
+        Path("./ft_irc/ircserv"),
+    ]
+    
+    # Also search in current directory and subdirectories
+    cwd = Path(".")
+    for item in cwd.rglob("ircserv"):
+        if item.is_file() and os.access(item, os.X_OK):
+            possible_paths.append(item)
+    
+    # Remove duplicates and filter existing executable files
+    found = []
+    seen = set()
+    for path in possible_paths:
+        abs_path = path.resolve()
+        if abs_path not in seen and path.exists() and os.access(path, os.X_OK):
+            found.append(path)
+            seen.add(abs_path)
+    
+    return found
+
+def auto_detect_setup() -> dict:
+    """Auto-detect the best setup for the user"""
+    setup = {
+        "binary": None,
+        "testers": [],
+        "suggestions": []
+    }
+    
+    # Find ircserv binary
+    binaries = find_ircserv_binary()
+    if binaries:
+        setup["binary"] = str(binaries[0])
+        if len(binaries) > 1:
+            setup["suggestions"].append(f"Found {len(binaries)} ircserv binaries. Using: {binaries[0]}")
+    
+    # Find testers
+    script_dir = Path(__file__).resolve().parent
+    for version, filename in [("v1", "irc_super_tester.py"), ("v2", "irc_super_tester_v2.py")]:
+        if (script_dir / filename).exists():
+            setup["testers"].append(version)
+    
+    return setup
 
 # --------------------------- Helpers ---------------------------
 
@@ -124,8 +218,14 @@ class Runner:
 
         vg_prefix = []
         if self.args.valgrind:
+            # Check if valgrind is available
+            try:
+                subprocess.run(["valgrind", "--version"], capture_output=True, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                print_error("Valgrind not found! Please install valgrind or run without --valgrind")
+                raise FileNotFoundError("Valgrind not available")
+            
             vg_prefix = default_valgrind_cmd()
-            # unique per‑run pid will be set by valgrind; but we can pre‑choose a file
             self.valgrind_log_file = self.outdir / f"valgrind.{int(time.time())}.log"
             vg_prefix += [f"--log-file={self.valgrind_log_file}"]
 
@@ -133,7 +233,8 @@ class Runner:
         log = self.server_log_file.open("w", buffering=1)
 
         cmd = vg_prefix + server_cmd
-        print(f"[runner] starting server: {' '.join(shlex.quote(c) for c in cmd)}")
+        print_info(f"Starting server: {' '.join(shlex.quote(c) for c in cmd)}")
+        
         self.server_proc = subprocess.Popen(
             cmd,
             stdout=log,
@@ -183,9 +284,22 @@ class Runner:
         if self.args.only:
             cmd += ["--only", *self.args.only]
 
-        print(f"[runner] running tester: {' '.join(shlex.quote(c) for c in cmd)}")
+        print_info(f"Running {self.args.tester} tester...")
+        
+        # Show progress dots while running
+        start_time = time.time()
         with tester_log.open("w", buffering=1) as log:
-            proc = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+            
+            # Simple progress indicator
+            while proc.poll() is None:
+                print(".", end="", flush=True)
+                time.sleep(0.5)
+            
+            print()  # New line after dots
+            elapsed = time.time() - start_time
+            print_info(f"Tester completed in {elapsed:.1f} seconds")
+            
             return proc.returncode
 
     # --- valgrind summary ---
@@ -204,111 +318,297 @@ class Runner:
 
     # --- orchestrate ---
     def run(self) -> int:
+        print_header("🚀 ft_irc Test Session Starting")
+        
         port = self.args.port or find_free_port()
-        print(f"[runner] using port {port}")
+        print_step(1, 4, f"Using port {colorize(str(port), Colors.BOLD)}")
 
         # Start server
-        self.start_server(port)
+        print_step(2, 4, "Starting IRC server...")
+        try:
+            self.start_server(port)
+        except Exception as e:
+            print_error(f"Failed to start server: {e}")
+            return 2
+        
+        print_info("Waiting for server to start listening...")
         ok = wait_for_listen(port, timeout=self.args.timeout)
         if not ok:
             self.stop_server()
-            print("[runner] ERROR: server didn't start listening in time")
+            print_error(f"Server didn't start listening within {self.args.timeout} seconds")
+            print_warning("Try increasing --timeout or check your server binary")
             return 2
 
+        print_success("Server is ready!")
+
         # Run tester
+        print_step(3, 4, f"Running {self.args.tester} tester...")
         rc = 99
         try:
             rc = self.run_tester(port)
+        except Exception as e:
+            print_error(f"Tester failed: {e}")
         finally:
+            print_step(4, 4, "Shutting down server...")
             self.stop_server()
 
-        # Summaries
-        tester_ok = (rc == 0)
-        print(f"\n[summary] tester status: {'PASS' if tester_ok else 'FAIL'} (rc={rc})")
-        if self.server_log_file:
-            print(f"[summary] server log: {self.server_log_file}")
-        print(f"[summary] tester log: {self.outdir / 'tester.log'}")
+        # Beautiful summary
+        self._print_summary(rc)
+        return 0 if rc == 0 else 1
+    
+    def _print_summary(self, tester_rc: int) -> None:
+        """Print a beautiful test summary"""
+        print_header("📊 Test Results Summary")
+        
+        # Test status
+        if tester_rc == 0:
+            print_success(f"All tests passed! 🎉")
+        else:
+            print_error(f"Tests failed (exit code: {tester_rc})")
+        
+        # Log files
+        print("\n📁 Log files:")
+        if self.server_log_file and self.server_log_file.exists():
+            size = self.server_log_file.stat().st_size
+            print(f"   Server log: {colorize(str(self.server_log_file), Colors.BLUE)} ({size} bytes)")
+        
+        tester_log = self.outdir / 'tester.log'
+        if tester_log.exists():
+            size = tester_log.stat().st_size
+            print(f"   Tester log: {colorize(str(tester_log), Colors.BLUE)} ({size} bytes)")
 
+        # Valgrind summary
         vg = self.summarize_valgrind()
         if vg is not None:
-            print("[summary] valgrind:")
+            print(f"\n🔍 Memory analysis (Valgrind):")
+            
+            # Check for serious issues
+            has_leaks = vg.get("definitely_lost", 0) > 0 or vg.get("indirectly_lost", 0) > 0
+            has_errors = vg.get("errors", 0) > 0
+            
+            if not has_leaks and not has_errors:
+                print_success("No memory leaks or errors detected! 🎯")
+            else:
+                if has_leaks:
+                    print_error("Memory leaks detected!")
+                if has_errors:
+                    print_error(f"{vg.get('errors', 0)} memory errors found!")
+            
+            # Detailed breakdown
+            print("   Detailed breakdown:")
             for k, v in vg.items():
-                print(f"  - {k.replace('_', ' ')}: {v}")
-            if vg.get("definitely_lost", 0) > 0 or vg.get("indirectly_lost", 0) > 0:
-                print("[summary] WARNING: memory leaks detected!")
-            if vg.get("open_fds", 0) > 0:
-                print("[summary] NOTE: open file descriptors reported by valgrind")
+                icon = "🔴" if k in ["definitely_lost", "indirectly_lost"] and v > 0 else "⚪"
+                print(f"     {icon} {k.replace('_', ' ').title()}: {v}")
         else:
-            print("[summary] valgrind: (not enabled)")
-
-        return 0 if tester_ok else 1
+            print(f"\n🔍 Memory analysis: {colorize('Not enabled', Colors.YELLOW)} (use --valgrind to enable)")
+        
+        print(f"\n{colorize('💡 Tip:', Colors.YELLOW)} Check the log files for detailed information!")
 
 
 # --------------------------- CLI ---------------------------
 
-def ask(prompt: str, default: str | None = None) -> str:
-    sfx = f" [{default}]" if default is not None else ""
-    val = input(f"{prompt}{sfx}: ").strip()
-    return val or (default or "")
+def ask(prompt: str, default: str | None = None, options: list[str] | None = None) -> str:
+    """Enhanced input function with validation"""
+    if options:
+        options_str = "/".join(f"{colorize(opt, Colors.BOLD)}" if opt == default else opt for opt in options)
+        prompt = f"{prompt} ({options_str})"
+    
+    suffix = f" [{colorize(default, Colors.GREEN)}]" if default is not None else ""
+    
+    while True:
+        try:
+            val = input(f"🎯 {prompt}{suffix}: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            if default is not None:
+                print(f"\nUsing default: {default}")
+                return default
+            else:
+                print_error("\nInput required. Exiting...")
+                sys.exit(1)
+        
+        result = val or (default or "")
+        
+        if options and result not in options:
+            print_error(f"Please choose one of: {', '.join(options)}")
+            continue
+        
+        return result
 
+def interactive_setup() -> argparse.Namespace:
+    """Enhanced interactive setup with auto-detection"""
+    print_header("🎮 Interactive Setup - Let's get your IRC server tested!")
+    
+    # Auto-detect setup
+    setup = auto_detect_setup()
+    
+    # Show what we found
+    if setup["suggestions"]:
+        print("🔍 Auto-detection results:")
+        for suggestion in setup["suggestions"]:
+            print_info(suggestion)
+        print()
+    
+    # Binary selection
+    if setup["binary"]:
+        print_success(f"Found ircserv binary: {setup['binary']}")
+        use_detected = ask("Use this binary?", "y", ["y", "n"])
+        if use_detected == "y":
+            binary = setup["binary"]
+        else:
+            binary = ask("Path to your ircserv binary", "./ircserv")
+    else:
+        print_warning("No ircserv binary auto-detected")
+        binary = ask("Path to your ircserv binary", "./ircserv")
+    
+    # Validate binary
+    if not Path(binary).exists():
+        print_error(f"Binary not found: {binary}")
+        print_info("Make sure you've compiled your project first!")
+        print_info("💡 Common locations: ./ircserv, ../ircserv, ./build/ircserv")
+        
+        # Try to suggest alternatives
+        found_binaries = find_ircserv_binary()
+        if found_binaries:
+            print_success(f"Found these alternatives: {', '.join(str(b) for b in found_binaries)}")
+            use_alt = ask("Use the first alternative?", "y", ["y", "n"])
+            if use_alt == "y":
+                binary = str(found_binaries[0])
+            else:
+                binary = ask("Path to your ircserv binary", "./ircserv")
+        else:
+            binary = ask("Path to your ircserv binary", "./ircserv")
+            
+        # Final validation
+        if not Path(binary).exists():
+            print_error(f"Still can't find binary: {binary}")
+            print_error("Please compile your server first or provide the correct path")
+            sys.exit(1)
+    
+    # Tester selection
+    if setup["testers"]:
+        available = ", ".join(setup["testers"])
+        print_success(f"Available testers: {available}")
+        if "v2" in setup["testers"]:
+            default_tester = "v2"
+        else:
+            default_tester = setup["testers"][0]
+    else:
+        print_warning("No testers found in current directory")
+        default_tester = "v2"
+    
+    tester = ask("Choose tester version", default_tester, ["v1", "v2"])
+    
+    # Other options
+    password = ask("Server password", "pass")
+    
+    print("\n🔧 Advanced options:")
+    use_vg = ask("Run with memory leak detection (Valgrind)?", "n", ["y", "n"]) == "y"
+    verbose = ask("Enable verbose output?", "n", ["y", "n"]) == "y"
+    
+    # Output directory
+    default_outdir = f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    outdir = ask("Output directory for logs", default_outdir)
+    
+    # Port (optional)
+    port_input = ask("Specific port to use (or auto-detect)", "auto")
+    port = None if port_input == "auto" else int(port_input) if port_input.isdigit() else None
+    
+    print_header("🎯 Configuration Summary")
+    print(f"📁 Binary: {colorize(binary, Colors.BLUE)}")
+    print(f"🧪 Tester: {colorize(tester, Colors.BLUE)}")
+    print(f"🔑 Password: {colorize(password, Colors.BLUE)}")
+    print(f"🔍 Valgrind: {colorize('Yes' if use_vg else 'No', Colors.GREEN if use_vg else Colors.YELLOW)}")
+    print(f"📝 Verbose: {colorize('Yes' if verbose else 'No', Colors.GREEN if verbose else Colors.YELLOW)}")
+    print(f"📊 Output: {colorize(outdir, Colors.BLUE)}")
+    
+    confirm = ask("\nProceed with these settings?", "y", ["y", "n"])
+    if confirm != "y":
+        print_info("Setup cancelled by user")
+        sys.exit(0)
 
-def interactive_defaults() -> argparse.Namespace:
-    print("\n== ft_irc Test Runner (interactive) ==\n")
-    binary = ask("Path to your compiled server binary", "./ircserv")
-    password = ask("Server password (PASS)", "pass")
-    tester = ask("Choose tester (v1 or v2)", "v2")
-    use_vg = ask("Run under valgrind? (y/N)", "N").lower().startswith("y")
-    outdir = ask("Output directory for logs", f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    verbose = ask("Verbose tester output? (y/N)", "N").lower().startswith("y")
-    port = ask("Port (enter for auto)", "").strip()
-
-    ns = argparse.Namespace(
+    return argparse.Namespace(
         binary=binary,
         password=password,
-        tester=tester if tester in {"v1", "v2"} else "v2",
+        tester=tester,
         valgrind=use_vg,
         out=outdir,
         verbose=verbose,
         only=[],
-        port=int(port) if port.isdigit() else None,
+        port=port,
         timeout=15.0,
     )
-    return ns
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="ft_irc Test Runner UI (no‑root)")
-    p.add_argument("--binary", help="Path to ./ircserv (compiled)")
-    p.add_argument("--password", default="pass", help="IRC PASS password")
-    p.add_argument("--tester", choices=["v1", "v2"], default="v2", help="Which tester to run")
-    p.add_argument("--only", nargs="*", default=[], help="Tester: run only these named tests")
-    p.add_argument("--port", type=int, help="Port to use (default: auto)")
-    p.add_argument("--timeout", type=float, default=15.0, help="Seconds to wait for server to listen")
-    p.add_argument("--valgrind", action="store_true", help="Run server under valgrind and parse leaks")
-    p.add_argument("--out", default=f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S')}", help="Directory for logs")
-    p.add_argument("--verbose", action="store_true", help="Tester: verbose output")
-    p.add_argument("--interactive", action="store_true", help="Use interactive prompts")
+    p = argparse.ArgumentParser(
+        description="🚀 ft_irc Test Runner - Enhanced Edition",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                           # Interactive mode (recommended)
+  %(prog)s --interactive             # Force interactive mode
+  %(prog)s --binary ./ircserv        # Quick test with auto-detection
+  %(prog)s --binary ./ircserv --valgrind --tester v2  # Full test with memory check
+  
+For beginners: Just run '%(prog)s' and follow the prompts! 🎯
+        """
+    )
+    p.add_argument("--binary", help="Path to your compiled ircserv binary")
+    p.add_argument("--password", default="pass", help="IRC server password (default: pass)")
+    p.add_argument("--tester", choices=["v1", "v2"], default="v2", help="Tester version to run (default: v2)")
+    p.add_argument("--only", nargs="*", default=[], help="Run only specific named tests")
+    p.add_argument("--port", type=int, help="Specific port to use (default: auto-detect)")
+    p.add_argument("--timeout", type=float, default=15.0, help="Seconds to wait for server startup (default: 15)")
+    p.add_argument("--valgrind", action="store_true", help="🔍 Run with memory leak detection")
+    p.add_argument("--out", default=f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}", help="Output directory for logs")
+    p.add_argument("--verbose", action="store_true", help="📝 Enable verbose tester output")
+    p.add_argument("--interactive", action="store_true", help="🎮 Use interactive setup mode")
     return p
 
 
 def main():
+    print_header("🚀 ft_irc Test Runner - Enhanced Edition")
+    
     ap = build_argparser()
     if len(sys.argv) == 1:
         # No flags: enter interactive mode by default
-        ns = interactive_defaults()
+        ns = interactive_setup()
     else:
         ns = ap.parse_args()
         if ns.interactive:
-            ns = interactive_defaults()
+            ns = interactive_setup()
         if not ns.binary:
-            ap.error("--binary is required (or use --interactive)")
-    runner = Runner(ns)
-    rc = runner.run()
-    sys.exit(rc)
+            # Try auto-detection
+            setup = auto_detect_setup()
+            if setup["binary"]:
+                print_success(f"Auto-detected binary: {setup['binary']}")
+                ns.binary = setup["binary"]
+            else:
+                ap.error("--binary is required (or use --interactive for guided setup)")
+    
+    try:
+        runner = Runner(ns)
+        rc = runner.run()
+        
+        if rc == 0:
+            print_success("🎉 All done! Check the results above.")
+        else:
+            print_error("❌ Some tests failed. Check the logs for details.")
+        
+        sys.exit(rc)
+    except FileNotFoundError as e:
+        print_error(f"File not found: {e}")
+        print_info("💡 Tip: Make sure your ircserv is compiled and accessible")
+        sys.exit(1)
+    except Exception as e:
+        print_error(f"Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[runner] interrupted by user")
+        print(f"\n{colorize('🛑 Interrupted by user', Colors.YELLOW)}")
+        print_info("Goodbye! 👋")
+        sys.exit(130)
