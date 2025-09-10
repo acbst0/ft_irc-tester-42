@@ -38,6 +38,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Try to import tkinter for GUI file dialog
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox
+    HAS_GUI = True
+except ImportError:
+    HAS_GUI = False
+
 # --------------------------- Colors & UI Helpers ---------------------------
 
 class Colors:
@@ -84,6 +92,56 @@ def print_info(text: str) -> None:
 def print_step(step: int, total: int, text: str) -> None:
     """Print a step in the process"""
     print(f"{colorize(f'[{step}/{total}]', Colors.BLUE)} {text}")
+
+# --------------------------- GUI File Picker ---------------------------
+
+def open_file_dialog(title: str = "Select ircserv binary", initial_dir: str = ".") -> str | None:
+    """Open a GUI file picker dialog"""
+    if not HAS_GUI:
+        return None
+    
+    try:
+        # Create a hidden root window
+        root = tk.Tk()
+        root.withdraw()  # Hide the main window
+        root.attributes('-topmost', True)  # Bring dialog to front
+        
+        # Configure dialog
+        file_path = filedialog.askopenfilename(
+            title=title,
+            initialdir=initial_dir,
+            filetypes=[
+                ("Executable files", "ircserv"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        root.destroy()  # Clean up
+        return file_path if file_path else None
+        
+    except Exception as e:
+        print_warning(f"GUI file picker failed: {e}")
+        return None
+
+def ask_with_file_picker(prompt: str, default: str | None = None) -> str:
+    """Ask for file path with optional GUI file picker"""
+    if HAS_GUI:
+        print(f"🎯 {prompt}")
+        print(f"   📁 Click to browse files or type path manually")
+        
+        choice = ask("Choose method", "browse", ["browse", "type"])
+        
+        if choice == "browse":
+            print_info("Opening file picker...")
+            selected_file = open_file_dialog("Select your ircserv binary")
+            if selected_file:
+                print_success(f"Selected: {selected_file}")
+                return selected_file
+            else:
+                print_warning("No file selected, falling back to manual input")
+    
+    # Fallback to manual input
+    return ask(f"Path to {prompt.lower()}", default)
 
 # --------------------------- Smart File Detection ---------------------------
 
@@ -455,10 +513,10 @@ def interactive_setup() -> argparse.Namespace:
         if use_detected == "y":
             binary = setup["binary"]
         else:
-            binary = ask("Path to your ircserv binary", "./ircserv")
+            binary = ask_with_file_picker("your ircserv binary", "./ircserv")
     else:
         print_warning("No ircserv binary auto-detected")
-        binary = ask("Path to your ircserv binary", "./ircserv")
+        binary = ask_with_file_picker("your ircserv binary", "./ircserv")
     
     # Validate binary
     if not Path(binary).exists():
@@ -474,9 +532,9 @@ def interactive_setup() -> argparse.Namespace:
             if use_alt == "y":
                 binary = str(found_binaries[0])
             else:
-                binary = ask("Path to your ircserv binary", "./ircserv")
+                binary = ask_with_file_picker("your ircserv binary", "./ircserv")
         else:
-            binary = ask("Path to your ircserv binary", "./ircserv")
+            binary = ask_with_file_picker("your ircserv binary", "./ircserv")
             
         # Final validation
         if not Path(binary).exists():
